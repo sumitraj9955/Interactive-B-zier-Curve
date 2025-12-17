@@ -59,5 +59,3 @@ Position = Position + Velocity
 
 ---
 
-## 📝 License
-Feel free to use this code for educational purposes!
