@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Physics Bézier Curve</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #eee;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        h1 { margin: 0 0 10px 0; font-size: 18px; color: #4facfe; }
+        p { margin: 5px 0; font-size: 14px; color: #ccc; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 4px; font-size: 12px;}
+        .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <h1>Bézier Physics Engine</h1>
+    <p>Move mouse to disturb the rope.</p>
+    <div class="legend-item"><div class="dot" style="background:white"></div>Curve Path</div>
+    <div class="legend-item"><div class="dot" style="background:#ff3366"></div>Control Points (Springs)</div>
+    <div class="legend-item"><div class="dot" style="background:#00f2ff"></div>Calculated Tangents</div>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+/**
+ * ==========================================
+ * PART 1: MATH UTILITIES
+ * Vector2 class for handling 2D operations
+ * ==========================================
+ */
+class Vector2 {
+    constructor(x, y) {
+        this.x = x || 0;
+        this.y = y || 0;
+    }
+
+    add(v) { return new Vector2(this.x + v.x, this.y + v.y); }
+    sub(v) { return new Vector2(this.x - v.x, this.y - v.y); }
+    scale(s) { return new Vector2(this.x * s, this.y * s); }
+    
+    // Calculate magnitude (length)
+    mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+
+    // Return normalized vector (length of 1)
+    normalize() {
+        const m = this.mag();
+        if (m === 0) return new Vector2(0, 0);
+        return new Vector2(this.x / m, this.y / m);
+    }
+}
+
+/**
+ * ==========================================
+ * PART 2: PHYSICS ENGINE
+ * SpringPoint handles the spring-damping logic
+ * ==========================================
+ */
+class SpringPoint {
+    constructor(x, y) {
+        this.pos = new Vector2(x, y);
+        this.target = new Vector2(x, y);
+        this.vel = new Vector2(0, 0);
+        
+        // Physics Constants
+        this.stiffness = 0.08; // Spring tension (k)
+        this.damping = 0.85;   // Friction/Air resistance
+    }
+
+    update() {
+        // 1. Calculate Force: F = -k * (position - target)
+        const force = this.target.sub(this.pos).scale(this.stiffness);
+
+        // 2. Apply Acceleration to Velocity
+        this.vel = this.vel.add(force);
+
+        // 3. Apply Damping (Friction)
+        this.vel = this.vel.scale(this.damping);
+
+        // 4. Update Position
+        this.pos = this.pos.add(this.vel);
+    }
+}
+
+/**
+ * ==========================================
+ * PART 3: BÉZIER LOGIC
+ * Manual calculation of Curve and Tangents
+ * ==========================================
+ */
+class BezierCurve {
+    constructor(width, height) {
+        this.width = width;
+        this.height = height;
+
+        // P0 and P3 are static endpoints
+        this.p0 = new Vector2(50, height / 2);
+        this.p3 = new Vector2(width - 50, height / 2);
+
+        // P1 and P2 are dynamic physics points
+        this.p1 = new SpringPoint(width * 0.33, height / 2);
+        this.p2 = new SpringPoint(width * 0.66, height / 2);
+    }
+
+    // Resize handler to keep endpoints on screen edges
+    resize(w, h) {
+        this.width = w; 
+        this.height = h;
+        this.p0 = new Vector2(50, h / 2);
+        this.p3 = new Vector2(w - 50, h / 2);
+    }
+
+    update(mouseX, mouseY) {
+        // Determine targets for P1 and P2 based on mouse
+        // To make it interesting, P1 and P2 don't go exactly to the mouse.
+        // They are pulled towards the mouse but maintain relative offsets.
+        
+        const centerX = this.width / 2;
+        const offsetRange = 100;
+
+        // If mouse is active (passed in), attract; otherwise return to resting state
+        if (mouseX !== null) {
+            this.p1.target = new Vector2(mouseX - offsetRange, mouseY);
+            this.p2.target = new Vector2(mouseX + offsetRange, mouseY);
+        } else {
+            // Resting state: evenly spaced
+            this.p1.target = new Vector2(this.width * 0.33, this.height / 2);
+            this.p2.target = new Vector2(this.width * 0.66, this.height / 2);
+        }
+
+        this.p1.update();
+        this.p2.update();
+    }
+
+    // cubic Bézier formula: B(t)
+    getPoint(t) {
+        const invT = 1 - t; // (1-t)
+        
+        // Term 1: (1-t)^3 * P0
+        const term1 = this.p0.scale(invT * invT * invT);
+        
+        // Term 2: 3 * (1-t)^2 * t * P1
+        const term2 = this.p1.pos.scale(3 * invT * invT * t);
+        
+        // Term 3: 3 * (1-t) * t^2 * P2
+        const term3 = this.p2.pos.scale(3 * invT * t * t);
+        
+        // Term 4: t^3 * P3
+        const term4 = this.p3.scale(t * t * t);
+
+        // Sum
+        return term1.add(term2).add(term3).add(term4);
+    }
+
+    // Derivative formula: B'(t)
+    getTangent(t) {
+        const invT = 1 - t;
+
+        // 3(1-t)^2 * (P1 - P0)
+        const term1 = (this.p1.pos.sub(this.p0)).scale(3 * invT * invT);
+        
+        // 6(1-t)t * (P2 - P1)
+        const term2 = (this.p2.pos.sub(this.p1.pos)).scale(6 * invT * t);
+        
+        // 3t^2 * (P3 - P2)
+        const term3 = (this.p3.sub(this.p2.pos)).scale(3 * t * t);
+
+        return term1.add(term2).add(term3).normalize();
+    }
+}
+
+/**
+ * ==========================================
+ * PART 4: RENDERING & MAIN LOOP
+ * ==========================================
+ */
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+let width, height;
+let bezier;
+let mousePos = { x: null, y: null };
+
+function init() {
+    onResize();
+    bezier = new BezierCurve(width, height);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('mousemove', e => {
+        mousePos.x = e.clientX;
+        mousePos.y = e.clientY;
+    });
+    // Reset spring target when mouse leaves window
+    window.addEventListener('mouseleave', () => {
+        mousePos.x = null; 
+        mousePos.y = null;
+    });
+    
+    requestAnimationFrame(loop);
+}
+
+function onResize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+    if (bezier) bezier.resize(width, height);
+}
+
+function loop() {
+    // 1. Clear Screen
+    ctx.clearRect(0, 0, width, height);
+    
+    // 2. Update Physics
+    bezier.update(mousePos.x, mousePos.y);
+
+    // 3. Draw The Curve (Manually using line segments)
+    ctx.beginPath();
+    const resolution = 100; // How many segments
+    
+    // Move to P0
+    const start = bezier.getPoint(0);
+    ctx.moveTo(start.x, start.y);
+
+    for (let i = 0; i <= resolution; i++) {
+        const t = i / resolution;
+        const p = bezier.getPoint(t);
+        ctx.lineTo(p.x, p.y);
+    }
+    
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // 4. Draw Tangents (at specific intervals)
+    ctx.beginPath();
+    const tangentCount = 8;
+    for (let i = 1; i < tangentCount; i++) {
+        const t = i / tangentCount;
+        const p = bezier.getPoint(t);
+        const tangent = bezier.getTangent(t); // returns normalized vector
+
+        // Scale tangent for visibility (e.g., 40px long)
+        const lineLen = 30;
+        const end = p.add(tangent.scale(lineLen));
+        const startTan = p.sub(tangent.scale(lineLen));
+
+        // Draw tangent line
+        ctx.moveTo(startTan.x, startTan.y);
+        ctx.lineTo(end.x, end.y);
+        
+        // Draw Arrowhead (simple)
+        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    }
+    ctx.strokeStyle = '#00f2ff'; // Cyan for tangents
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+
+    // 5. Draw Control Points & Handles (Visualization)
+    // Draw P0 -> P1 line
+    ctx.beginPath();
+    ctx.moveTo(bezier.p0.x, bezier.p0.y);
+    ctx.lineTo(bezier.p1.pos.x, bezier.p1.pos.y);
+    // Draw P3 -> P2 line
+    ctx.moveTo(bezier.p3.x, bezier.p3.y);
+    ctx.lineTo(bezier.p2.pos.x, bezier.p2.pos.y);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Draw the dynamic points P1, P2
+    drawPoint(bezier.p1.pos, '#ff3366');
+    drawPoint(bezier.p2.pos, '#ff3366');
+    
+    // Draw static endpoints P0, P3
+    drawPoint(bezier.p0, '#666');
+    drawPoint(bezier.p3, '#666');
+
+    requestAnimationFrame(loop);
+}
+
+function drawPoint(vec, color) {
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(vec.x, vec.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// Start
+init();
+
+</script>
+</body>
+</html>
